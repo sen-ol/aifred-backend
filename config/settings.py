@@ -67,10 +67,9 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 # ─── Veritabanı  (Heroku varsa DATABASE_URL otomatik gelir)
 DATABASES = {
-    "default": dj_database_url.config(
+    'default': dj_database_url.config(
         conn_max_age=600,
-        ssl_require=not DEBUG,
-        default=f"sqlite:///{BASE_DIR/'db.sqlite3'}",
+        ssl_require=True
     )
 }
 
