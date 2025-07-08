@@ -17,3 +17,16 @@ class Message(models.Model):
     role = models.CharField(max_length=10)
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+class GuestProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                related_name="guest_profile")
+    passport_no   = models.CharField(max_length=30, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+
+class StaffProfile(models.Model):
+    user  = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                 related_name="staff_profile")
+    title = models.CharField(max_length=80, blank=True)
+    desk  = models.CharField(max_length=80, blank=True)
+
