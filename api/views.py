@@ -1,48 +1,103 @@
-import os, openai
-from rest_framework import generics, permissions, views, status
-from rest_framework.response import Response
+import logging
+
+from django.conf import settings
+from django.db import connection, transaction
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from openai import APIError, OpenAI
+from rest_framework import generics, permissions, status, views
+from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
+
 from .models import Advisor, Conversation, Message
-from .serializers import AdvisorSerializer, MessageSerializer
+from .serializers import AdvisorSerializer, ChatRequestSerializer, MessageSerializer
+
+logger = logging.getLogger(__name__)
+
+
+def health(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except Exception:
+        return JsonResponse({"status": "unavailable"}, status=503)
+    return JsonResponse({"status": "ok", "service": "aifred-api"})
+
 
 class AdvisorList(generics.ListAPIView):
     queryset = Advisor.objects.all()
     serializer_class = AdvisorSerializer
     permission_classes = [permissions.AllowAny]
 
+
 class ChatView(views.APIView):
     permission_classes = [permissions.AllowAny]
-    def post(self, request, slug):
-        advisor = get_object_or_404(Advisor, pk=slug)
-        user = request.user if request.user.is_authenticated else None
-        if user:
-            convo_id = request.data.get("conversation_id")
-            convo = (
-                get_object_or_404(Conversation, id=convo_id, user=user)
-                if convo_id else Conversation.objects.create(user=user, advisor=advisor)
-            )
-            Message.objects.create(conversation=convo, role="user",
-                                   content=request.data["message"])
-        else:
-            convo = None
-            history = [{"role":"system","content":advisor.system_prompt},
-                       {"role":"user","content":request.data["message"]}]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "chat"
 
-        
-        history = [{"role":"system","content":advisor.system_prompt}] + [
-            {"role":m.role,"content":m.content} for m in convo.messages.order_by("created_at")[:20]
-        ]
-        completion = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=history,
-            api_key=os.getenv("OPENAI_API_KEY"),
-        )
-        bot_text = completion.choices[0].message.content.strip()
-        
+    def post(self, request, slug):
+        payload = ChatRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        advisor = get_object_or_404(Advisor, pk=slug)
+        convo_id = payload.validated_data.get("conversation_id")
+        convo = None
+
+        if convo_id:
+            if not request.user.is_authenticated:
+                return Response({"detail": "Bu sohbet için giriş yapmalısınız."}, status=401)
+            convo = get_object_or_404(
+                Conversation, id=convo_id, user=request.user, advisor=advisor
+            )
+
+        if not settings.OPENAI_API_KEY:
+            return Response(
+                {"detail": "Sohbet servisi henüz yapılandırılmadı."}, status=503
+            )
+
+        history = []
         if convo:
-            Message.objects.create(conversation=convo, role="assistant", content=bot_text)
-            msgs = MessageSerializer(convo.messages.all(), many=True).data
-            return Response({"conversation_id": convo.id, "reply": bot_text,
-                             "messages": msgs}, status=status.HTTP_200_OK)
-        else:
-            return Response({"reply": bot_text}, status=status.HTTP_200_OK)
+            recent = list(convo.messages.order_by("-created_at", "-id")[:20])
+            history.extend(
+                {"role": message.role, "content": message.content}
+                for message in reversed(recent)
+            )
+        elif not request.user.is_authenticated:
+            history.extend(payload.validated_data.get("history", []))
+        text = payload.validated_data["message"]
+        history.append({"role": "user", "content": text})
+
+        try:
+            with OpenAI(api_key=settings.OPENAI_API_KEY, timeout=25.0, max_retries=0) as client:
+                completion = client.responses.create(
+                    model=settings.OPENAI_MODEL,
+                    instructions=advisor.system_prompt,
+                    input=history,
+                    reasoning={"effort": settings.OPENAI_REASONING_EFFORT},
+                    max_output_tokens=1200,
+                    store=False,
+                )
+            reply = (completion.output_text or "").strip()
+        except APIError as exc:
+            logger.warning("AI provider failed: %s", type(exc).__name__)
+            return Response(
+                {"detail": "Yanıt şu anda üretilemiyor. Lütfen tekrar deneyin."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if not reply:
+            return Response({"detail": "Boş yanıt alındı. Lütfen tekrar deneyin."}, status=502)
+
+        if request.user.is_authenticated:
+            with transaction.atomic():
+                if convo is None:
+                    convo = Conversation.objects.create(user=request.user, advisor=advisor)
+                Message.objects.create(conversation=convo, role="user", content=text)
+                Message.objects.create(conversation=convo, role="assistant", content=reply)
+            return Response({
+                "conversation_id": convo.id,
+                "reply": reply,
+                "messages": MessageSerializer(
+                    convo.messages.order_by("created_at", "id"), many=True
+                ).data,
+            })
+        return Response({"reply": reply})

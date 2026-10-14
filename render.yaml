@@ -1,0 +1,61 @@
+# Short-lived preview: the free PostgreSQL database expires after 30 days.
+services:
+  - type: web
+    name: aifred-api-preview
+    runtime: python
+    plan: free
+    region: frankfurt
+    repo: https://github.com/sen-ol/aifred-backend
+    branch: codex/online-demo
+    buildCommand: bash build.sh
+    startCommand: bash start.sh
+    healthCheckPath: /health/
+    autoDeployTrigger: off
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aifred-preview-db
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-6-luna
+      - key: OPENAI_REASONING_EFFORT
+        value: none
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: CHAT_RATE_LIMIT
+        value: 10/min
+  - type: web
+    name: aifred-web-preview
+    runtime: node
+    plan: free
+    region: frankfurt
+    repo: https://github.com/sen-ol/aifred-web
+    branch: codex/online-demo
+    buildCommand: npm ci && npm run build
+    startCommand: bash start.sh
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXTAUTH_SECRET
+        generateValue: true
+      - key: BACKEND_URL
+        fromService:
+          type: web
+          name: aifred-api-preview
+          envVarKey: RENDER_EXTERNAL_URL
+databases:
+  - name: aifred-preview-db
+    plan: free
+    region: frankfurt
+    databaseName: aifred
+    user: aifred
+    ipAllowList: []

@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import dj_database_url
 from dotenv import load_dotenv
+from django.core.exceptions import ImproperlyConfigured
 
 # ────────────────────────────────────────────────────────────────
 # Proje kökü & .env
@@ -9,9 +10,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")                 # .env dosyan yoksa atla
 
 # ─── Güvenlik
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "<change-this>")
-DEBUG      = os.getenv("DEBUG", "True") == "True"
-ALLOWED_HOSTS = [h for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h] or ["*"]
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY") or os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured("Set SECRET_KEY before starting the service.")
+    SECRET_KEY = "development-only-not-for-deployment"
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
+if os.getenv("RENDER_EXTERNAL_HOSTNAME"):
+    ALLOWED_HOSTS.append(os.environ["RENDER_EXTERNAL_HOSTNAME"])
+if os.getenv("RENDER") and not os.getenv("DATABASE_URL"):
+    raise ImproperlyConfigured("Render requires DATABASE_URL for persistent storage.")
 
 # ─── Uygulamalar
 INSTALLED_APPS = [
@@ -71,7 +80,7 @@ DATABASES = {
     "default": dj_database_url.parse(
         os.getenv("DATABASE_URL", DEFAULT_SQLITE),
         conn_max_age=600,
-        ssl_require=not DEBUG,
+        ssl_require=os.getenv("DATABASE_SSL_REQUIRE", "False").lower() == "true",
     )
 }
 
@@ -80,6 +89,7 @@ AUTH_USER_MODEL = "users.User"
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("rest_framework_simplejwt.authentication.JWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+    "DEFAULT_THROTTLE_RATES": {"chat": os.getenv("CHAT_RATE_LIMIT", "10/min")},
 }
 
 # ─── Şifre kuralları (varsayılan)
@@ -100,14 +110,31 @@ USE_TZ   = True
 STATIC_URL  = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = []   
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 
 # ─── CORS
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",      # Vite dev
-    "exp://127.0.0.1:8081",       # Expo dev
+    origin.strip() for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS", "http://localhost:3000"
+    ).split(",") if origin.strip()
 ]
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip() for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if os.getenv("RENDER_EXTERNAL_HOSTNAME"):
+    CSRF_TRUSTED_ORIGINS.append("https://" + os.environ["RENDER_EXTERNAL_HOSTNAME"])
+if os.getenv("RENDER"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 # ─── Diğer
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
+
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "none")
