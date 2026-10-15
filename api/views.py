@@ -91,8 +91,28 @@ class ChatView(views.APIView):
                 type(exc).__name__, code if isinstance(code, str) and code in known_codes else "unknown",
                 getattr(exc, "status_code", None),
             )
+            code = code if isinstance(code, str) else None
+            if code == "credit_balance_exhausted":
+                error_code = "ai_credit_exhausted"
+                detail = "Sohbet hizmetinin API kredisi tükendi. Devam etmek için site yöneticisinin kredi yüklemesi gerekiyor."
+                retryable = False
+            elif code in {
+                "insufficient_quota", "organization_spend_limit_exceeded",
+                "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
+            }:
+                error_code = "ai_quota_exceeded"
+                detail = "Sohbet hizmetinin kullanım limiti doldu. Site yöneticisinin API kredisini ve kullanım limitlerini kontrol etmesi gerekiyor."
+                retryable = False
+            elif code in {"invalid_api_key", "model_not_found"}:
+                error_code = "ai_configuration_error"
+                detail = "Sohbet hizmetinin ayarları kontrol edilmeli. Lütfen site yöneticisine haber verin."
+                retryable = False
+            else:
+                error_code = "ai_temporarily_unavailable"
+                detail = "Yanıt şu anda üretilemiyor. Lütfen biraz sonra tekrar deneyin."
+                retryable = True
             return Response(
-                {"detail": "Yanıt şu anda üretilemiyor. Lütfen tekrar deneyin."},
+                {"detail": detail, "code": error_code, "retryable": retryable},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 

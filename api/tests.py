@@ -121,3 +121,34 @@ class ChatTests(APITestCase):
                 for private_value in ("private-provider-message", "private-error-value", "test-only"):
                     self.assertNotIn(private_value, diagnostic)
                     self.assertNotIn(private_value, str(response.data))
+
+    def test_credit_failure_is_actionable_and_not_persisted(self):
+        from openai import RateLimitError
+        import httpx
+        self.client.force_authenticate(self.user)
+        self.create.side_effect = RateLimitError(
+            "private-provider-message",
+            response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/responses")),
+            body={"code": "credit_balance_exhausted"},
+        )
+        response = self.client.post(self.url, {"message": "Hello"}, format="json")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data["code"], "ai_credit_exhausted")
+        self.assertFalse(response.data["retryable"])
+        self.assertIn("kredi yüklemesi", response.data["detail"])
+        self.create.assert_called_once()
+        self.assertEqual(Message.objects.count(), 0)
+        self.assertEqual(Conversation.objects.count(), 0)
+
+    def test_temporary_rate_limit_is_distinct_from_credit_failure(self):
+        from openai import RateLimitError
+        import httpx
+        self.create.side_effect = RateLimitError(
+            "private-provider-message",
+            response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/responses")),
+            body={"code": "rate_limit_exceeded"},
+        )
+        response = self.client.post(self.url, {"message": "Hello"}, format="json")
+        self.assertEqual(response.data["code"], "ai_temporarily_unavailable")
+        self.assertTrue(response.data["retryable"])
+        self.assertNotIn("kredi", response.data["detail"])
