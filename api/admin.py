@@ -6,7 +6,8 @@ from .models import Advisor, Conversation, Message, GuestProfile, StaffProfile
 class AdvisorAdmin(admin.ModelAdmin):
     list_display = ("slug", "name")
     search_fields = ("slug", "name")
-    readonly_fields = ("slug",)   
+    def get_readonly_fields(self, request, obj=None):
+        return ("slug",) if obj else ()
 
 
 @admin.register(Conversation)

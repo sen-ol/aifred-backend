@@ -1,0 +1,23 @@
+name: Backend checks
+on:
+  push:
+    branches: ["codex/online-demo"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DEBUG: "True"
+      DJANGO_SECRET_KEY: "ci-only-not-a-deployment-secret"
+      OPENAI_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python manage.py check
+      - run: python manage.py test
+      - run: python manage.py collectstatic --no-input
