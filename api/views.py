@@ -78,7 +78,19 @@ class ChatView(views.APIView):
                 )
             reply = (completion.output_text or "").strip()
         except APIError as exc:
-            logger.warning("AI provider failed: %s", type(exc).__name__)
+            # Log only recognized codes, never provider messages or request bodies.
+            known_codes = {
+                "insufficient_quota", "credit_balance_exhausted",
+                "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
+                "organization_usage_limit_exceeded", "rate_limit_exceeded", "slow_down",
+                "model_not_found", "invalid_api_key",
+            }
+            code = getattr(exc, "code", None)
+            logger.warning(
+                "AI provider failed: %s code=%s status=%s",
+                type(exc).__name__, code if isinstance(code, str) and code in known_codes else "unknown",
+                getattr(exc, "status_code", None),
+            )
             return Response(
                 {"detail": "Yanıt şu anda üretilemiyor. Lütfen tekrar deneyin."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,

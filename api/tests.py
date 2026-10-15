@@ -101,3 +101,23 @@ class ChatTests(APITestCase):
         call_command("seed_preview")
         self.advisor.refresh_from_db()
         self.assertEqual(self.advisor.system_prompt, "Be helpful.")
+
+    def test_provider_quota_diagnostic_does_not_expose_raw_error(self):
+        from openai import RateLimitError
+        import httpx
+        for code in ("insufficient_quota", "credit_balance_exhausted", "private-error-value"):
+            with self.subTest(code=code):
+                self.create.side_effect = RateLimitError(
+                    "private-provider-message",
+                    response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/responses")),
+                    body={"code": code, "message": "private-provider-message"},
+                )
+                with self.assertLogs("api.views", level="WARNING") as logs:
+                    response = self.client.post(self.url, {"message": "hi"}, format="json")
+                self.assertEqual(response.status_code, 503)
+                diagnostic = " ".join(logs.output)
+                self.assertIn("code=" + (code if code != "private-error-value" else "unknown"), diagnostic)
+                self.assertIn("status=429", diagnostic)
+                for private_value in ("private-provider-message", "private-error-value", "test-only"):
+                    self.assertNotIn(private_value, diagnostic)
+                    self.assertNotIn(private_value, str(response.data))
